@@ -1,65 +1,190 @@
 from abc import ABC, abstractmethod
-from pyexpat import model
 from typing import Any
-from Environment import Environment
+import json
+import re
 
 import requests
+
+from Environment import Environment
+from messages.Message import MasterStateMessage, PlayerStateMessage, MasterActionMessage, PlayerActionMessage
+from prompts.agent_prompts import format_master_prompt, format_player_prompt
+
 
 class Orchestrator(ABC):
     def __init__(self, orchestration_config):
         self.environment = Environment(orchestration_config["env_config"])
     
     @abstractmethod
-    def get_master_state(self, master_id):
+    def get_master_state(self, master_id) -> MasterStateMessage:
         pass
 
     @abstractmethod
-    def handle_master_action(self, master_id, action: Any):
+    def handle_master_action(self, master_id, action: MasterActionMessage) -> dict:
         pass
 
     @abstractmethod
-    def get_player_state(self, player_id):
+    def get_player_state(self, player_id) -> PlayerStateMessage:
         pass
 
     @abstractmethod
-    def handle_player_action(self, player_id, action: Any):
+    def handle_player_action(self, player_id, action: PlayerActionMessage) -> dict:
         pass
 
 
 class OllamaOrchestrator(Orchestrator):
     def __init__(self, config):
         super().__init__(config)
-        # Additional setup for Ollama backend
+        
+        self.master_model = config.get("master_model", "llama3.2")
+        self.player_model = config.get("player_model", "llama3.2")
+        self.ollama_url = config.get("ollama_url", "http://localhost:11434/api/generate")
 
-        self.master = config.get("master", None)
-        self.player = config.get("player", None)
+    def get_master_state(self, master_id) -> MasterStateMessage:
+        """Get the current game state formatted for the codemaster."""
+        env_state = self.environment.get_master_state()
+        
+        # Get team words for the specified master
+        team_words = env_state["word_sets"].get(master_id, [])
+        
+        # Determine opponent words (all other teams' words)
+        opponent_words = []
+        for team_id, words in env_state["word_sets"].items():
+            if team_id != master_id:
+                opponent_words.extend(words)
+        
+        # Neutral words are board words not assigned to any team
+        all_team_words = set()
+        for words in env_state["word_sets"].values():
+            all_team_words.update(words)
+        neutral_words = [w for w in env_state["board"] if w not in all_team_words]
+        
+        return MasterStateMessage(
+            team_words=team_words,
+            opponent_words=opponent_words,
+            neutral_words=neutral_words
+        )
 
-    def get_master_state(self, master_id):
-        # Implementation for Ollama
-        pass
+    def handle_master_action(self, master_id, action: MasterActionMessage = None) -> dict:
+        """
+        Query the master model for a hint and pass it to the environment.
+        If action is None, generates a new action from the model.
+        Returns the result from the environment.
+        """
+        if action is None:
+            state = self.get_master_state(master_id)
+            prompt = format_master_prompt(state)
+            response = self._query_ollama(prompt, self.master_model)
+            
+            action = self._parse_master_response(response)
+            if action is None:
+                return {"success": False, "error": "Failed to parse master response", "raw_response": response}
+        
+        result = self.environment.handle_master_action(action)
+        
+        return {
+            "success": True,
+            "action": action.to_dict(),
+            "environment_result": result
+        }
 
-    def handle_master_action(self, master_id, action: Any):
-        # Implementation for Ollama
-        pass
+    def get_player_state(self, player_id) -> PlayerStateMessage:
+        """Get the current game state formatted for a player."""
+        env_state = self.environment.get_player_state()
+        
+        return PlayerStateMessage(
+            hint_word=env_state.get("current_hint", {}).get("word", ""),
+            hint_number=env_state.get("current_hint", {}).get("number", 0),
+            board=env_state.get("board", []),
+            guessed_words=env_state.get("guessed_words", [])
+        )
 
-    def get_player_state(self, player_id):
-        # Implementation for Ollama
-        pass
+    def handle_player_action(self, player_id, action: PlayerActionMessage = None) -> dict:
+        """
+        Query the player model for guesses and pass them to the environment.
+        If action is None, generates a new action from the model.
+        Returns the result from the environment.
+        """
+        if action is None:
+            state = self.get_player_state(player_id)
+            prompt = format_player_prompt(state)
+            response = self._query_ollama(prompt, self.player_model)
+            
+            action = self._parse_player_response(response)
+            if action is None:
+                return {"success": False, "error": "Failed to parse player response", "raw_response": response}
+        
+        result = self.environment.handle_player_action(action)
+        
+        return {
+            "success": True,
+            "action": action.to_dict(),
+            "environment_result": result
+        }
 
-    def handle_player_action(self, player_id, action: Any):
-        # Implementation for Ollama
-        pass
-
-    def _query_ollama(self, prompt, model):
-        url = "http://localhost:11434/api/generate"
+    def _query_ollama(self, prompt: str, model: str) -> str:
+        """Query the Ollama API with the given prompt and model."""
         payload = {
             "model": model,
             "prompt": prompt,
             "stream": False
         }
         try:
-            response = requests.post(url, json=payload)
+            response = requests.post(self.ollama_url, json=payload)
             response.raise_for_status()
             return response.json()['response']
         except requests.exceptions.RequestException as e:
             return f"Error querying Ollama: {e}"
+
+    def _parse_master_response(self, response: str) -> MasterActionMessage | None:
+        """Parse the master's response to extract hint word and number."""
+        try:
+            # Look for the <RESULT>...</RESULT> block
+            result_match = re.search(r'<RESULT>(.*?)</RESULT>', response, re.DOTALL | re.IGNORECASE)
+            if result_match:
+                result_text = result_match.group(1)
+            else:
+                result_text = response
+            
+            hint_match = re.search(r'HINT:\s*(\w+)\s*NUMBER:\s*(\d+)', result_text, re.IGNORECASE)
+            if hint_match:
+                return MasterActionMessage(
+                    hint_word=hint_match.group(1),
+                    hint_number=int(hint_match.group(2))
+                )
+            return None
+        except Exception:
+            return None
+
+    def _parse_player_response(self, response: str) -> PlayerActionMessage | None:
+        """Parse the player's response to extract guesses."""
+        try:
+            json_match = re.search(r'\{[^{}]*"guesses"[^{}]*\}', response, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                return PlayerActionMessage(guesses=data.get("guesses", []))
+            
+            # Fallback: try parsing the whole response as JSON
+            data = json.loads(response)
+            return PlayerActionMessage(guesses=data.get("guesses", []))
+        except (json.JSONDecodeError, Exception):
+            return None
+
+    def run_turn(self, master_id: int, player_id: int) -> dict:
+        """
+        Run a complete turn: master gives hint, player guesses.
+        Returns the combined results.
+        """
+        master_result = self.handle_master_action(master_id)
+        if not master_result.get("success"):
+            return {"success": False, "phase": "master", "error": master_result}
+        
+        player_result = self.handle_player_action(player_id)
+        if not player_result.get("success"):
+            return {"success": False, "phase": "player", "error": player_result}
+        
+        return {
+            "success": True,
+            "master_result": master_result,
+            "player_result": player_result,
+            "game_over": self.environment.check_win()
+        }
