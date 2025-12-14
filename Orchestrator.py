@@ -35,8 +35,8 @@ class OllamaOrchestrator(Orchestrator):
     def __init__(self, config):
         super().__init__(config)
         
-        self.master_model = config.get("master_model", "qwen3:4b-instruct")
-        self.player_model = config.get("player_model", "qwen3:4b-instruct")
+        self.master_model = config.get("master_model", "llama3.2b")
+        self.player_model = config.get("player_model", "llama3.2b")
         self.ollama_url = config.get("ollama_url", "http://localhost:11434/api/generate")
 
         self.orchestration_log = {}
@@ -154,7 +154,7 @@ class OllamaOrchestrator(Orchestrator):
         except (json.JSONDecodeError, Exception):
             return None
 
-    def run_turn(self) -> dict:
+    def step(self) -> dict:
         """
         Run a complete turn: master gives hint, player guesses.
         Returns the combined results.
@@ -188,6 +188,8 @@ class OllamaOrchestrator(Orchestrator):
             "environment_state": self.environment.get_game_state(),
             "master_response": m_response,
             "player_response": p_response,
+            "master_action": m_action,
+            "player_action": player_action,
             "game_over": self.environment.check_win()
         }
         self.orchestration_log[self.step] = log_event
