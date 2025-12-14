@@ -182,15 +182,13 @@ class OllamaOrchestrator(Orchestrator):
 
 
         self.step += 1
-        self.orchestration_log[self.step] = {
+        log_event = {
             "master_result": master_result,
             "player_result": player_result,
-            "environment_state": self.environment.get_game_state()
-        }
-
-        return {
-            "success": True,
-            "master_result": master_result,
-            "player_result": player_result,
+            "environment_state": self.environment.get_game_state(),
+            "master_response": m_response,
+            "player_response": p_response,
             "game_over": self.environment.check_win()
         }
+        self.orchestration_log[self.step] = log_event
+        return log_event
