@@ -32,6 +32,10 @@ class Orchestrator(ABC):
     def handle_player_action(self, player_id, action: PlayerActionMessage) -> dict:
         pass
 
+    @abstractmethod
+    def reset(self) -> None:
+        pass
+
     def run_full(self) -> dict:
         pass
     
@@ -201,6 +205,13 @@ class OllamaOrchestrator(Orchestrator):
         }
         with open(filepath, 'w') as f:
             json.dump(run_data, f, indent=4)
+
+    def reset(self) -> None:
+        """Reset the orchestrator for a new episode."""
+        self.environment = Environment(self.config_dict.get("env_config"))
+        self.orchestration_log = {}
+        self.reward_log = {}
+        self.step_count = 0
 
     def _finalize_step(self, m_prompt, m_resp, m_action, m_result, 
                       p_prompt, p_resp, p_action, p_result, 
