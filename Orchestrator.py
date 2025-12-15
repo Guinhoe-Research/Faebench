@@ -8,6 +8,7 @@ import requests
 from Environment import Environment
 from messages.Message import MasterStateMessage, PlayerStateMessage, MasterActionMessage, PlayerActionMessage
 from prompts.agent_prompts import format_master_prompt, format_player_prompt
+from Rewards import reward_function
 
 
 class Orchestrator(ABC):
@@ -30,6 +31,9 @@ class Orchestrator(ABC):
     def handle_player_action(self, player_id, action: PlayerActionMessage) -> dict:
         pass
 
+    def run_full(self) -> dict:
+        pass
+
 
 class OllamaOrchestrator(Orchestrator):
     def __init__(self, config):
@@ -40,7 +44,8 @@ class OllamaOrchestrator(Orchestrator):
         self.ollama_url = config.get("ollama_url", "http://localhost:11434/api/generate")
 
         self.orchestration_log = {}
-        self.step = 0
+        self.reward_log = {}
+        self.step_count = 0
 
     def get_master_state(self) -> MasterStateMessage:
         """Get the current game state formatted for the codemaster."""
@@ -159,12 +164,14 @@ class OllamaOrchestrator(Orchestrator):
         Run a complete turn: master gives hint, player guesses.
         Returns the combined results.
         """
+        success_flag = True
         m_state = self.get_master_state()
         m_prompt = format_master_prompt(m_state)
         m_response = self._query_ollama(m_prompt, self.master_model)
         
         m_action = self._parse_master_response(m_response)
         if m_action is None:
+            success_flag = False
             return {"success": False, "error": "Failed to parse master response", "raw_response": m_response}
     
         master_result = self.handle_master_action(m_action)
@@ -177,11 +184,12 @@ class OllamaOrchestrator(Orchestrator):
         
         player_action = self._parse_player_response(p_response)
         if player_action is None:
+            success_flag = False
             return {"success": False, "error": "Failed to parse player response", "raw_response": p_response}
         player_result = self.handle_player_action(player_action)
 
 
-        self.step += 1
+        self.step_count += 1
         log_event = {
             "master_result": master_result,
             "player_result": player_result,
@@ -190,7 +198,17 @@ class OllamaOrchestrator(Orchestrator):
             "player_response": p_response,
             "master_action": m_action,
             "player_action": player_action,
-            "game_over": self.environment.check_win()
+            "game_over": self.environment.check_win(),
+            "success": success_flag
         }
-        self.orchestration_log[self.step] = log_event
+        self.orchestration_log[self.step_count] = log_event
+        self.reward_log[self.step_count] = reward_function(log_event)
         return log_event
+    
+    def run_episode(self, limit: int = 10) -> dict:
+        """Run the full game until completion."""
+        while not self.environment.check_win() and self.step_count < limit:
+            step_result = self.step()
+            if not step_result.get("success"):
+                return {"success": False, "complete_log": self.orchestration_log, "reward_log": self.reward_log, "total_steps": self.step_count}
+        return {"success": True, "complete_log": self.orchestration_log, "reward_log": self.reward_log, "total_steps": self.step_count}
