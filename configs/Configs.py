@@ -6,6 +6,13 @@ class OrchestratorConfig:
     player_model: str
     env_config: 'EnvironmentConfig'
     reward_config: 'RewardConfig'
+    
+@dataclass
+class OpenAIConfig:
+    master_model: str
+    player_model: str
+    env_config: 'EnvironmentConfig'
+    reward_config: 'RewardConfig'
 
 @dataclass
 class RewardConfig:
