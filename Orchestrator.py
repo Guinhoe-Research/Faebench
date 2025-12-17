@@ -253,9 +253,10 @@ class OllamaOrchestrator(Orchestrator):
             "stream": False
         }
         try:
-            response = requests.post(self.ollama_url, json=payload)
             response.raise_for_status()
             return response.json()['response']
+        except requests.exceptions.Timeout:
+            return "Error: Timeout"
         except requests.exceptions.RequestException as e:
             return f"Error querying Ollama: {e}"
 
@@ -269,20 +270,31 @@ class OllamaOrchestrator(Orchestrator):
             else:
                 result_text = response
             
-            hint_match = re.search(r'HINT:\s*(\w+)\s*NUMBER:\s*(\d+)', result_text, re.IGNORECASE)
+            # Robust regex to handle quotes and spacing
+            # Matches: HINT: "apple" NUMBER: 2 Or HINT: apple NUMBER: 2
+            hint_match = re.search(r'HINT:\s*["\']?([\w-]+)["\']?\s*NUMBER:\s*(\d+)', result_text, re.IGNORECASE)
             if hint_match:
                 return MasterActionMessage(
                     hint_word=hint_match.group(1),
                     hint_number=int(hint_match.group(2))
                 )
+            
             return None
-        except Exception:
+        except Exception as e:
+            print(f"Exception during Master parsing: {e}")
             return None
 
     def _parse_player_response(self, response: str) -> PlayerActionMessage:
         """Parse the player's response to extract guesses."""
         try:
-            json_match = re.search(r'\{[^{}]*"guesses"[^{}]*\}', response, re.DOTALL)
+            # First, try to find the <RESULT> block
+            result_match = re.search(r'<RESULT>(.*?)</RESULT>', response, re.DOTALL | re.IGNORECASE)
+            if result_match:
+                result_text = result_match.group(1)
+            else:
+                result_text = response
+
+            json_match = re.search(r'\{[^{}]*"guesses"[^{}]*\}', result_text, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group(0))
                 return PlayerActionMessage(guesses=data.get("guesses", []))
