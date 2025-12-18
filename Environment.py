@@ -11,6 +11,7 @@ class Environment:
         self.board = []
 
         self.guessed_words = []
+        self.guessed_words_log = []
 
         # Configuration parameters
         self.max_words = config.get("max_words", 25)
@@ -45,7 +46,8 @@ class Environment:
         return {
             "board": self.board,
             "word_sets": self.word_sets,
-            "guessed_words": self.guessed_words
+            "guessed_words": self.guessed_words,
+            "guessed_words_log": self.guessed_words_log
         }
     
     def get_player_state(self):
@@ -53,7 +55,7 @@ class Environment:
         return {
             "current_hint": self.current_hint,
             "board": [w for w in self.board if w not in self.guessed_words],
-            "guessed_words": self.guessed_words
+            "guessed_words_log": self.guessed_words_log
         }
     
     def handle_master_action(self, action: MasterActionMessage) -> dict:
@@ -96,7 +98,8 @@ class Environment:
             guess_dict = {"word": guess, "result": result}
             
             results.append(guess_dict)
-            self.guessed_words.append(guess_dict)
+            self.guessed_words.append(guess)
+            self.guessed_words_log.append(guess_dict)
         
         return {
             "success": True,

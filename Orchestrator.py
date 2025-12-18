@@ -18,8 +18,11 @@ class Orchestrator(ABC):
         """Get the current game state formatted for the codemaster."""
         env_state = self.environment.get_master_state()
         
-        # Get team words for the specified master
-        team_words = env_state["word_sets"].get(1, [])
+        # Get team words LEFT for the specified master
+        team_words = [    
+            i for i in env_state["word_sets"].get(1, [])
+            if i not in env_state["guessed_words"]
+        ]
         
         # Determine opponent words (all other teams' words)
         opponent_words = []
@@ -33,13 +36,13 @@ class Orchestrator(ABC):
             all_team_words.update(words)
         neutral_words = [w for w in env_state["board"] if w not in all_team_words]
         
-        guessed_words = env_state["guessed_words"]
+        guessed_words_log = env_state["guessed_words_log"]
         
         return MasterStateMessage(
             team_words=team_words,
             opponent_words=opponent_words,
             neutral_words=neutral_words,
-            guessed_words=guessed_words
+            guessed_words_log=guessed_words_log
         )
     
     def handle_master_action(self, action: MasterActionMessage = None) -> dict:
@@ -64,7 +67,7 @@ class Orchestrator(ABC):
             hint_word=env_state.get("current_hint", {}).get("word", ""),
             hint_number=env_state.get("current_hint", {}).get("number", 0),
             board=env_state.get("board", []),
-            guessed_words=env_state.get("guessed_words", [])
+            guessed_words_log=env_state.get("guessed_words_log", [])
         )
 
     def handle_player_action(self, action: PlayerActionMessage) -> dict:
