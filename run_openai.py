@@ -1,19 +1,33 @@
-from Orchestrator import OpenAIOrchestrator
+from Orchestrator import Orchestrator
 
-from configs.Configs import OpenAIConfig, EnvironmentConfig, RewardConfig
+from configs.Configs import OpenAIConfig, EnvironmentConfig, OrchestratorConfig, RewardConfig, TeamConfig
 
 from dotenv import load_dotenv
 
 import uuid
 import os
 
+from models.OpenAIAgent import OpenAIAgent
+
 load_dotenv()
 
 api_key = os.environ.get('OPEN_API_KEY')
 
-CONFIG = OpenAIConfig(
-    master_model="gpt-5-nano",
-    player_model="gpt-5-nano",
+OPENAI_CONFIG = OpenAIConfig(
+    model="gpt-5-nano"
+)
+
+MODEL = OpenAIAgent(
+    config=OPENAI_CONFIG
+)
+
+TEAM_CONFIG = TeamConfig(
+    master_model=MODEL,
+    player_models=[MODEL]
+)
+
+ORCHESRATOR_CONFIG = OrchestratorConfig(
+    team_configs=[TEAM_CONFIG],
     env_config=EnvironmentConfig(
         teams=1,
         max_words=25,
@@ -22,8 +36,8 @@ CONFIG = OpenAIConfig(
     reward_config=RewardConfig(),
 )
 
-orchestrator = OpenAIOrchestrator(CONFIG, api_key)
-result = orchestrator.run_episode(limit=10)
+orchestrator = Orchestrator(ORCHESRATOR_CONFIG)
+result = orchestrator.run_episode(limit=1)
 run_id = str(uuid.uuid4())
 output_dir = "output"
 os.makedirs(output_dir, exist_ok=True)

@@ -6,11 +6,12 @@ import re
 import requests
 
 from Environment import Environment
+from configs.Configs import OrchestratorConfig
 from messages.Message import MasterStateMessage, PlayerStateMessage, MasterActionMessage, PlayerActionMessage
 from prompts.agent_prompts import format_master_prompt, format_player_prompt
 from Rewards import RewardModule
 
-class Orchestrator(ABC):
+class Orchestrator:
     def __init__(self, orchestration_config):
         # Support both dictionary and object configuration
         if isinstance(orchestration_config, dict):
@@ -19,12 +20,23 @@ class Orchestrator(ABC):
                 "master_model": team_cfg.get("master_model", "llama3.2b"),
                 "player_models": team_cfg.get("player_models", ["llama3.2b"])
             } for i, team_cfg in enumerate(orchestration_config.get("team_configs", []))}
+            self.reward_module = RewardModule(orchestration_config.get("reward_config"))
         else:
             self.environment = Environment(orchestration_config.env_config)
             self.teams = {i+1: {
                 "master_model": team_cfg.master_model,
                 "player_models": team_cfg.player_models
             } for i, team_cfg in enumerate(orchestration_config.team_configs)}
+            self.reward_module = RewardModule(orchestration_config.reward_config)
+        
+        self.orchestration_log = {}
+        self.reward_log = {i: [] for i in self.teams.keys()}
+        self.step_count = 0
+        
+        if isinstance(orchestration_config, OrchestratorConfig):
+            self.config_dict = orchestration_config.to_dict()
+        else:
+            self.config_dict = orchestration_config if isinstance(orchestration_config, dict) else {}
 
     def get_master_state(self, team_id=1) -> MasterStateMessage:
         """Get the current game state formatted for the codemaster."""
@@ -120,9 +132,8 @@ class Orchestrator(ABC):
         success_flag = False
         try:
             # Query Master
-            m_response = self._query(m_prompt, self.teams[team_id]["master_model"])
+            m_action, m_response = self.teams[team_id]["master_model"].generate_master(m_prompt)
             print(f"[DEBUG] Team {team_id} Master Response:", m_response)
-            m_action = self._parse_master_response(m_response)
             print(f"[DEBUG] Team {team_id} Master Action:", m_action)
             if m_action is None:
                 error_msg = "Failed to parse master response"
@@ -139,13 +150,13 @@ class Orchestrator(ABC):
             p_prompt = format_player_prompt(p_state)
 
             if len(self.teams[team_id]["player_models"]) == 1:
-                p_response = self._query(p_prompt, self.teams[team_id]["player_models"][0]) 
+                p_action, p_response = self.teams[team_id]["player_models"][0].generate_player_action(p_prompt)
             else:
                 # TODO: Implement multi-player querying logic
                 print(f"[WARNING] Multiple player models found for team {team_id}, but logic not implemented.")
                 pass
 
-            p_action = self._parse_player_response(p_response)
+            # p_action = self._parse_player_response(p_response)
             print(f"[DEBUG] Team {team_id} Player Action:", p_action)
             if p_action is None:
                 error_msg = "Failed to parse player response"
@@ -241,191 +252,3 @@ class Orchestrator(ABC):
             self.reward_log[i].append((master_reward, player_reward))
                 
         return log_event
-    
-    @abstractmethod
-    def _query(self, prompt: str, model: str) -> str:
-        pass
-
-    @abstractmethod
-    def _parse_master_response(self, response: str) -> MasterActionMessage:
-        pass
-
-    @abstractmethod
-    def _parse_player_response(self, response: str) -> PlayerActionMessage:
-        pass
-
-class OllamaOrchestrator(Orchestrator):
-    def __init__(self, config):
-        # Helper to convert config to dict safely
-        if is_dataclass(config):
-            self.config_dict = asdict(config)
-        else:
-            self.config_dict = config if isinstance(config, dict) else {}
-
-        super().__init__(self.config_dict)
-        self.config = config
-
-        self.ollama_url = self.config_dict.get("ollama_url", "http://localhost:11434/api/generate")
-
-        self.orchestration_log = {}
-        # Correct initialization of reward_log keys
-        self.reward_log = {i: [] for i in self.teams.keys()}
-        self.step_count = 0
-        
-        # Initialize Reward Module
-        self.reward_module = RewardModule(self.config_dict.get("reward_config"))
-
-    def _query(self, prompt: str, model: str) -> str:
-        """Query the Ollama API with the given prompt and model."""
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "stream": False
-        }
-        try:
-            response = requests.post(self.ollama_url, json=payload, timeout=10)
-            response.raise_for_status()
-            return response.json()['response']
-        except requests.exceptions.Timeout:
-            return "Error: Timeout"
-        except requests.exceptions.RequestException as e:
-            return f"Error querying Ollama: {e}"
-
-    def _parse_master_response(self, response: str) -> MasterActionMessage:
-        """Parse the master's response to extract hint word and number."""
-        try:
-            # Look for the <RESULT>...</RESULT> block
-            result_match = re.search(r'<RESULT>(.*?)</RESULT>', response, re.DOTALL | re.IGNORECASE)
-            if result_match:
-                result_text = result_match.group(1)
-            else:
-                result_text = response
-            
-            # Robust regex to handle quotes and spacing
-            # Matches: HINT: "apple" NUMBER: 2 Or HINT: apple NUMBER: 2
-            hint_match = re.search(r'HINT:\s*["\']?([\w-]+)["\']?\s*NUMBER:\s*(\d+)', result_text, re.IGNORECASE)
-            if hint_match:
-                return MasterActionMessage(
-                    hint_word=hint_match.group(1),
-                    hint_number=int(hint_match.group(2))
-                )
-            
-            return None
-        except Exception as e:
-            print(f"Exception during Master parsing: {e}")
-            return None
-
-    def _parse_player_response(self, response: str) -> PlayerActionMessage:
-        """Parse the player's response to extract guesses."""
-        try:
-            # First, try to find the <RESULT> block
-            result_match = re.search(r'<RESULT>(.*?)</RESULT>', response, re.DOTALL | re.IGNORECASE)
-            if result_match:
-                result_text = result_match.group(1)
-            else:
-                result_text = response
-
-            json_match = re.search(r'\{[^{}]*"guesses"[^{}]*\}', result_text, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-                return PlayerActionMessage(guesses=data.get("guesses", []))
-            
-            # Fallback: try parsing the whole response as JSON
-            data = json.loads(response)
-            return PlayerActionMessage(guesses=data.get("guesses", []))
-        except (json.JSONDecodeError, Exception):
-            return None
-
-class OpenAIOrchestrator(Orchestrator):
-    def __init__(self, config, api_key):
-        # Helper to convert config to dict safely
-        if is_dataclass(config):
-            self.config_dict = asdict(config)
-        else:
-            self.config_dict = config if isinstance(config, dict) else {}
-
-        super().__init__(self.config_dict)
-        self.config = config
-
-        self.api_key = api_key
-
-        self.orchestration_log = {}
-        self.reward_log = {i: [] for i in self.teams.keys()}
-        self.step_count = 0
-        
-        # Initialize Reward Module
-        self.reward_module = RewardModule(self.config_dict.get("reward_config"))
-        print(f"OpenAI Orchestrator initialized")
-
-    def _query(self, prompt: str, model: str) -> str:
-        """Query the OpenAI API with the given prompt and model."""
-        payload = {
-            "model": model,
-            "input": prompt,
-        }
-        headers = {
-        "Authorization": f"Bearer {self.api_key}",
-        "Content-Type": "application/json"
-        }
-        try:
-            resp = requests.post("https://api.openai.com/v1/responses", headers=headers, json=payload, timeout=2000)
-            resp.raise_for_status()
-            
-            data = resp.json()
-            # Handle dual output format: a list containing 'reasoning' and 'message'
-            outputs = data.get("output", [])
-            for item in outputs:
-                if item.get("type") == "message":
-                    content_list = item.get("content", [])
-                    for content_item in content_list:
-                        if content_item.get("type") == "output_text":
-                            return content_item.get("text", "")
-            
-            if "output" in data and "content" in data["output"]:
-                 return data["output"]["content"]["text"]
-                 
-            return ""
-        except requests.exceptions.Timeout:
-            return "Error: Timeout"
-        except requests.exceptions.RequestException as e:
-            return f"Error querying OpenAI: {e}"
-    
-    def _parse_master_response(self, response: str) -> MasterActionMessage:
-        """Reuse Ollama logic or same logic"""
-        try:
-            # Look for the <RESULT>...</RESULT> block
-            result_match = re.search(r'<RESULT>(.*?)</RESULT>', response, re.DOTALL | re.IGNORECASE)
-            if result_match:
-                result_text = result_match.group(1)
-            else:
-                result_text = response
-            
-            hint_match = re.search(r'HINT:\s*["\']?([\w-]+)["\']?\s*NUMBER:\s*(\d+)', result_text, re.IGNORECASE)
-            if hint_match:
-                return MasterActionMessage(
-                    hint_word=hint_match.group(1),
-                    hint_number=int(hint_match.group(2))
-                )
-            return None
-        except Exception as e:
-            print(f"Exception during Master parsing: {e}")
-            return None
-
-    def _parse_player_response(self, response: str) -> PlayerActionMessage:
-        """Reuse existing logic"""
-        try:
-            result_match = re.search(r'<RESULT>(.*?)</RESULT>', response, re.DOTALL | re.IGNORECASE)
-            if result_match:
-                result_text = result_match.group(1)
-            else:
-                result_text = response
-
-            json_match = re.search(r'\{[^{}]*"guesses"[^{}]*\}', result_text, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group(0))
-                return PlayerActionMessage(guesses=data.get("guesses", []))
-            
-            data = json.loads(response)
-            return PlayerActionMessage(guesses=data.get("guesses", []))
-        except (json.JSONDecodeError, Exception):
-            return None

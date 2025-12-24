@@ -1,6 +1,9 @@
 class RewardModule:
     def __init__(self, reward_config=None):
-        self.FORMAT_PENALTY = reward_config.get("FORMAT_PENALTY", -10) if reward_config else -10
+        if isinstance(reward_config, dict):
+            self.FORMAT_PENALTY = reward_config.get("FORMAT_PENALTY", -10) if reward_config else -10
+        else:
+            self.FORMAT_PENALTY = reward_config.FORMAT_PENALTY if reward_config else -10
         self.BOARD_WORD_USE_PENALTY = -8
         self.VALID_HINT_REWARD = 5
 

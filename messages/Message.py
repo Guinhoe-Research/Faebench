@@ -69,3 +69,14 @@ class PlayerActionMessage:
         return {
             "guesses": self.guesses
         }
+
+@dataclass
+class PlayerDiscussionMessage:
+    response: str
+    guesses: list
+    
+    def to_dict(self):
+        return {
+            "response": self.response,
+            "guesses": self.guesses
+        }

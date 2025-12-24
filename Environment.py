@@ -5,7 +5,16 @@ import random
 class Environment:
     def __init__(self, config):
         # Game state
-        self.teams = config.get("teams", 1)
+        
+        if isinstance(config, dict):
+            self.teams = config.get("teams", 1)
+            self.max_words = config.get("max_words", 25)
+            word_list_file = config.get("word_list_file", None)
+        else:
+            self.teams = config.teams
+            self.max_words = config.max_words
+            word_list_file = config.word_list_file
+            
         self.word_sets = {}
         self.neutral_words = []
         self.board = []
@@ -14,10 +23,8 @@ class Environment:
         self.guessed_words_log = {i: [] for i in range(1, self.teams + 1)}
 
         # Configuration parameters
-        self.max_words = config.get("max_words", 25)
-
-        if "word_list_file" in config:
-            with open(config["word_list_file"], 'r') as f:
+        if word_list_file:
+            with open(word_list_file, 'r') as f:
                 word_list = [line.strip() for line in f.readlines()]
                 self._setup_board(word_list)
         else:
