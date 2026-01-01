@@ -1,3 +1,4 @@
+import copy
 from Orchestrator import Orchestrator
 
 from configs.Configs import OpenAIConfig, EnvironmentConfig, OrchestratorConfig, RewardConfig, TeamConfig
@@ -23,10 +24,10 @@ MODEL = OpenAIAgent(
 
 TEAM_CONFIG = TeamConfig(
     master_model=MODEL,
-    player_models=[MODEL]
+    player_models=[copy.copy(MODEL) for _ in range(2)]  # Two players per team
 )
 
-ORCHESRATOR_CONFIG = OrchestratorConfig(
+ORCHESTRATOR_CONFIG = OrchestratorConfig(
     team_configs=[TEAM_CONFIG],
     env_config=EnvironmentConfig(
         teams=1,
@@ -36,8 +37,8 @@ ORCHESRATOR_CONFIG = OrchestratorConfig(
     reward_config=RewardConfig(),
 )
 
-orchestrator = Orchestrator(ORCHESRATOR_CONFIG)
-result = orchestrator.run_episode(limit=1)
+orchestrator = Orchestrator(ORCHESTRATOR_CONFIG)
+result = orchestrator.run_episode(limit=10)
 run_id = str(uuid.uuid4())
 output_dir = "output"
 os.makedirs(output_dir, exist_ok=True)
